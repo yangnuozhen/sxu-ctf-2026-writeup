@@ -1309,3 +1309,36 @@ curl -sS --max-time 20 \
 ```plain
 flag{bdaf96f6f3403be1720938ef20ccac34}
 ```
+
+### 02. Justppb
+
+#### 初步分析
+
+「仅仅需要爆破」。
+
+收到。
+
+探测 `pb.php` 的响应，发现两种失败文案不同：
+
+| 输入 | 响应 |
+|---|---|
+| 用户名不存在 | `<h1>Invalid username.</h1>`（**有**句点）|
+| 用户名存在但密码错 | `<h1>Invalid password</h1>`（**无**句点）|
+| 都正确 | `<h1>Welcome, <user>! flag{...}</h1>` |
+
+逐一枚举爆破即可。
+
+#### 用户名枚举
+
+常用用户名如 admin/root/guest/test... 都不存在。
+
+改用 Dirb 自带的人名字典，发现用户 `blake` 存在。
+
+#### 密码爆破
+
+尝试了用户名之变体以及各种弱密码，最终命中 `a1b2c3d4`。
+
+```html
+<h1>Welcome, blake! flag{12312}</h1>
+```
+
