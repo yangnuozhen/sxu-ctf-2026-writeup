@@ -865,7 +865,80 @@ python3 exploit.py [IP] [PORT]
 
 ## Reverse 方向
 
-### py2cc
+### 02. ezre
 
 #### 初步分析
+
+检查附件 EXE 类型：
+
+![alt text](assets/r02.file.png)
+
+PE32、Intel i386、Windows 控制台程序。
+
+检查 strings：
+
+![alt text](assets/r02.strings.png)
+
+#### 逆向主函数
+
+![alt text](assets/r02.mainGraph.png)
+
+主函数位于虚拟地址 `0x401100`，读取输入的调用位于 `0x40115A`，成功分支打印调用位于 `0x4011B8`。
+
+进入函数后，程序把 `0x4020F8` 开始的常量复制到栈上。
+
+![alt text](assets/r02.xref.png)
+
+#### 还原校验循环
+
+![alt text](assets/r02.verifyLoop.png)
+
+这里有三个主要局部量：
+
+| 栈位置 | 含义 |
+| --- | --- |
+| `[ebp-0x40]` | 循环下标 `i` |
+| `[ebp-0x3C+i]` | 输入缓冲区的第 `i` 个字节 |
+| `[ebp-0x1C+i]` | 目标数组的第 `i` 个字节 |
+
+`0x14` 等于十进制 20，循环下标从 0 到 19。`xor eax, [ebp-0x40]` 的含义是把输入字符与**当前下标**异或，而不是与固定密钥异或。接着取 `al` 写回输入缓冲区，再与目标数组比较。
+
+等价校验逻辑：
+
+```c
+scanf("%20s", input);
+for (int i = 0; i < 20; i++) {
+    input[i] ^= i;
+    if (input[i] != target[i]) {
+        printf("Error");
+        return 0;
+    }
+}
+printf("You got it!");
+return 0;
+```
+
+#### 逆运算还原输入
+
+每个位置满足：
+
+```text
+input[i] XOR i = target[i]
+```
+
+利用异或的自反性，可直接逐字节计算。
+
+例如前五位：
+
+```text
+0x66 XOR 0x00 = 0x66 = f
+0x6D XOR 0x01 = 0x6C = l
+0x63 XOR 0x02 = 0x61 = a
+0x64 XOR 0x03 = 0x67 = g
+0x7F XOR 0x04 = 0x7B = {
+```
+
+循环利用，得到 `flag{1234567890abcd}`。
+
+### 03. oooops
 
