@@ -550,8 +550,63 @@ hint:it's not just flag!!!
 
 但尝试了各种方法，拼尽全力无法战胜，遂放弃。
 
+### 02. SimpleUSB
 
+#### 初步分析
 
+「动过的键盘必有痕迹」，故检查 USB HID 流量。
 
+![alt text](./assets/m02.usbhidCheck.png)
 
+HID Data 符合常见的 8 字节键盘输入格式。
 
+#### 读出他动了啥
+
+查询对应 Usage Id 映射，部分映射如下表：
+
+| Usage ID | 无 Shift 时 | 按下 Shift 时 |
+| --- | --- | --- |
+| `0x04` | `a` | `A`，同时受 Caps Lock 影响 |
+| `0x12` | `o` | `O`，同时受 Caps Lock 影响 |
+| `0x1E` | `1` | `!` |
+| `0x1F` | `2` | `@` |
+| `0x22` | `5` | `%` |
+| `0x26` | `9` | `(` |
+| `0x31` | `\` | 竖线（U+007C） |
+| `0x39` | Caps Lock | 切换大小写锁定状态 |
+
+修饰键字节中，`0x02` 对应左 Shift，`0x20` 对应右 Shift。考虑用位掩码 `0x22` 检查任意一侧 Shift。
+
+比如第 33 帧，就是右 Shift 的例子。
+
+![alt text](./assets/m02.f33.png)
+
+```plain
+20 00 26 00 00 00 00 00
+```
+
+`0x26` 对应数字键 `9`，按下右 Shift 后应输出 `(`。
+
+再看大写锁定，共出现 6 次 Caps Lock 按下事件，分别位于第 47、65、155、165、227、241 帧。每次按下时，都需要翻转状态。
+
+处理报告，恢复字符:
+
+```plain
+Ao(mgHSK%f@q91\2D$X=ARmB'1,<8i0etb!/NI;q2)f)$@q/tV149
+```
+
+#### 解码字符
+
+注意到字符范围符合 ASCII85。尝试:
+
+```python
+import base64
+
+flag = base64.a85decode(typed).decode('ascii')
+```
+
+得到 Flag: 
+
+```plain
+flag{1d4cdfb6-12ed-d22a-129c-9c157e1ccba2}
+```
