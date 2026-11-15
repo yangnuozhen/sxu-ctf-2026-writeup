@@ -205,7 +205,7 @@ $$
 这是异常曲线，也等价于 Frobenius 迹为 1。此时可以使用 Smart attack，将椭圆曲线离散对数问题转到加法群。参考 [Generating Anomalous Elliptic Curves，第 2 节](https://www.monnerat.info/publications/anomalous.pdf)。
 
 参数验证：
-![alt text](./assets/image.png)
+![alt text](./assets/c02.paraVerify.png)
 
 接下来做 Smart attack 中的映射。
 
