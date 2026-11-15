@@ -75,7 +75,7 @@ flag{yu@nshen_qidong!}
 
 得到密钥：
 
-```text
+```plain
 key，十六进制：97b99e652b261b77
 低 12 位：0xb77
 ```
@@ -165,7 +165,7 @@ $$
 
 本题参数为：
 
-```text
+```plain
 p = 11093300438765357787693823122068501933326829181518693650897090781749379503427651954028543076247583697669597230934286751428880673539155279232304301123931419
 
 a = 490963434153515882934487973185142842357175523008183292296815140698999054658777820556076794490414610737654365807063916602037816955706321036900113929329671
@@ -272,7 +272,7 @@ urandom(8) + m + b'\x00' * (ZZ(p).nbits() // 8 - len(m) - 8 - 1)
 
 恢复出 $p$ 后，已知其位长是 512，所以：
 
-```text
+```plain
 512 // 8 = 64
 ```
 
@@ -284,7 +284,7 @@ $$
 
 完整消息字节串的结构是：
 
-```text
+```plain
 8 字节随机前缀 || 1 字节字符 || 54 字节零
 ```
 
@@ -430,7 +430,7 @@ $$
 
 本题第二次约简实际得到的三个基向量，最大绝对元素位长分别为：
 
-```text
+```plain
 [72, 128, 256]
 ```
 
@@ -452,7 +452,7 @@ $$
 
 逐项取低 8 位并转换为字节串，得到：
 
-```text
+```plain
 Congratulations! Your flag is: flag{893d041e-c0a2-3145-5320-cdee7d3c87fb}
 ```
 
@@ -465,4 +465,93 @@ python -m pip install sympy fpylll cysignals python-flint
 ```
 
 完整脚本见 [rosita_solve.py](./assets/rosita_solve.py)。
+
+## Misc 方向
+
+### 01. Streaming
+
+#### 初步分析
+
+打开 `？.pcapng`，映入眼帘的是一堆 UDP 包，以及一个 RTCP，主要数据方向未 `192.168.1.128:41544 -> 192.168.1.1:1234`. 尝试解码 UDP 包为 RTP 协议。
+
+![alt text](./assets/m01.rtpDecode.png)
+
+#### 分析 RTP Stream
+
+进一步检查负载，发现符合 H.264 的单 NAL、STAP-A 和 FU-A 封装；重组后还能由 H.264 解码器成功解码，从而确认视频格式。
+
+![alt text](./assets/m01.f2Detail.png)
+
+#### 重组 H.264
+
+UDP 负载包含 RTP 包头，RTP 负载又可能包含 NAL 聚合或分片结构。直接将 UDP 负载连接会把这些封装字节混入码流。即使已经去掉 RTP 包头，仍需处理 STAP-A 与 FU-A。
+
+使用 tshark 的 `rtp.payload` 字段取得不含 RTP 包头的负载。负载第一个字节的低 5 位给出本次封装类型：
+
+```python
+kind = payload[0] & 0x1F
+```
+
+Annex-B H.264 字节流使用起始码分隔 NAL。本脚本在每个完整 NAL 前加入：
+
+```text
+00 00 00 01
+```
+
+单 NAL 负载可以整体写出。STAP-A 的格式为：
+
+```text
+STAP-A 指示字节 | 长度1（2字节） | NAL1 | 长度2（2字节） | NAL2 | ...
+```
+
+长度字段不属于实际视频 NAL，应解析后丢弃。
+
+
+FU-A 负载的前两个字节分别为 FU indicator 和 FU header。FU header 中的 S、E 位标记起始片和结束片，低 5 位保留原始 NAL 类型。
+
+恢复原始 NAL 头的方法为：
+
+```python
+nal_header = (fu_indicator & 0xE0) | (fu_header & 0x1F)
+```
+
+在 S 位置位的首片创建 NAL，并写入恢复出的 NAL 头；后续分片只连接其第 3 字节开始的数据，到 E 位置位时完成一个 NAL。脚本检查分片起止、序号连续性，以及同一分片组的头部和时间戳是否一致。
+
+重组脚本见 [extract_streaming.py](./assets/extract_streaming.py) .
+
+#### 解码视频
+
+用 ffprobe check 重组后视频流。
+
+![alt text](./assets/m01.ffprobe.png)
+
+H.264、968×844、58 帧. 
+
+导出视频帧。
+
+![alt text](./assets/m01.ffmpegFrames.png)
+
+#### 打开看看
+
+注意到 29 - 30 帧中的记事本出现：
+
+![alt text](./assets/m01.0030.png)
+
+```text
+flag1 is 'flag{3b3a9c08-'
+hint:it's not just flag!!!
+```
+
+得出第一段 Flag。
+
+#### 第二段呢？
+
+第一段 Flag 后的 `hint:it's not just flag!!!`，提示 Flag1 很有可能也是第二段 Flag 的关键。
+
+但尝试了各种方法，拼尽全力无法战胜，遂放弃。
+
+
+
+
+
 
