@@ -942,3 +942,274 @@ input[i] XOR i = target[i]
 
 ### 03. oooops
 
+#### 初步分析
+
+解压附件后，检查文件：
+
+![alt text](assets/r03.file.png)
+
+现知外层是 x86-64 Linux ELF，采用 PIE，符号表被裁剪。
+
+注意到 ELF 中存在名为 `pydata` 的节，文件偏移为 `0x9284`，大小为 `0xA03107`：
+
+![alt text](assets/r03.pydataSection.png)
+
+考虑 PyInstaller 打包程序？
+
+#### 怎么和想象的不一样？
+
+标准 CArchive cookie 的 8 字节魔数为：
+
+```text
+4d 45 49 0c 0b 0a 0b 0e    MEI.....
+```
+
+直接搜索，搜不到。
+
+但注意到：
+
+```text
+73 77 49 0c 0b 0a 0b 0e    swI.....
+```
+
+三字节前缀由 `MEI` 变成了 `swI`，实际修改了第 1、2 字节；后 5 字节保持不变。
+
+故可能存在 PyInstaller 归档。可搜索后 5 字节，再向前回退 3 字节定位 cookie 起点。
+
+#### Cookie 与归档起点
+
+本题使用的 cookie 结构可以按大端解析：
+
+```python
+struct.unpack('!8sIIII64s', cookie_bytes)
+```
+
+各字段依次为：8 字节魔数、归档总长度、TOC 相对偏移、TOC 长度、Python 版本字段、64 字节 Python 动态库名称。结构总长度为 88 字节。
+
+| 字段 | 本题值 |
+| --- | --- |
+| cookie 文件偏移 | `0xA0C333` |
+| cookie 总长度 | `88 = 0x58` |
+| 归档总长度 | `0xA03107` |
+| TOC 相对偏移 | `0xA0259F` |
+| TOC 长度 | `0xB10` |
+| Python 版本字段 | `35`，即 Python 3.5 |
+| Python 动态库 | `libpython3.5m.so.1.0` |
+
+归档起点为：
+
+```text
+archive_start = cookie_offset + 88 - package_length
+              = 0xA0C333 + 0x58 - 0xA03107
+              = 0x9284
+```
+
+这个结果与 ELF 的 `pydata` 节偏移一致。
+
+#### 按 TOC 提取脚本
+
+
+每个 TOC 条目的固定头可按下面的结构读取：
+
+```python
+struct.unpack_from('!IIIIBc', blob, position)
+```
+
+固定头共 18 字节，含条目总长度、数据相对偏移、存储长度、原始长度、压缩标记和类型；余下部分是零结尾名称。数据的绝对文件偏移为 `archive_start + entry_offset`。若压缩标记为真，使用 zlib 解压，并验证解压后长度。
+
+提取出的关键脚本项为：
+
+```text
+s ooops 1650
+```
+
+`s` 表示脚本类型，1650 是解压后的字节数。该文件是 marshal 序列化数据，并非带常规 `.pyc` 文件头的完整 pyc。
+
+提取脚本见 [r03_extract.py](./assets/r03_extract.py) 。
+
+#### 怎么和想象的还是不一样？
+
+使用 [r03_inspect_code.py](./assets/r03_inspect_code.py) 的自定义 marshal 读取器，把代码对象解析成普通字典。它读取 Python 3.5 的代码对象字段：
+
+```text
+argcount, kwonlyargcount, nlocals, stacksize, flags
+code, consts, names, varnames, freevars, cellvars
+filename, name, firstlineno, lnotab
+```
+
+读取器还处理整数、字节串、短 ASCII 字符串、元组和引用槽。marshal 类型字节的最高位用于引用标记，`r` 类型引用此前对象，因此不能只按字节位置盲目提取所有字符串。
+
+解析后可以看到 `<module>`、`anti_debug`、`decrypt_flag`、两个 `<genexpr>` 和 `main` 等代码对象。名称和常量仍然具有语义，提供了恢复操作码的重要依据。
+
+#### 用模块导入结构确定第一批操作码
+
+
+模块的名称表为：
+
+```text
+('sys', 'struct', 'zlib', 'ctypes',
+ 'anti_debug', 'decrypt_flag', 'main', '__name__')
+```
+
+开头四条指令的字节形式是：
+
+```text
+0:  77 00 00
+3:  77 01 00
+6:  90 00 00
+9:  5b 00 00
+```
+
+结合常量 0、None 和名称 `sys`，可将其解释为典型模块导入结构：
+
+```text
+LOAD_CONST 0
+LOAD_CONST None
+IMPORT_NAME sys
+STORE_NAME sys
+```
+
+类似的结构随后对 `struct`、`zlib` 和 `ctypes` 重复出现。因此可以确定：`0x77` 是 `LOAD_CONST`，`0x90` 是 `IMPORT_NAME`，`0x5B` 是 `STORE_NAME`。再结合函数构造、属性访问、循环和栈变化，逐步恢复其余映射。
+
+#### 与解密有关的关键映射
+
+![alt text](assets/r03.inspectCode.png)
+
+| 本题值 | 实际指令 | 识别依据 |
+| --- | --- | --- |
+| `0x77` | `LOAD_CONST` | 导入层级、None、整数、字节常量 |
+| `0x78` | `LOAD_GLOBAL` | 调用 `struct`、`bytes`、`len` 等名称 |
+| `0x64` / `0x79` | `LOAD_FAST` / `STORE_FAST` | 局部变量读写 |
+| `0x6C` / `0x88` | `LOAD_DEREF` / `STORE_DEREF` | `data`、`key` 的闭包单元 |
+| `0x65` | `LOAD_CLOSURE` | 把闭包单元交给生成器函数 |
+| `0x7C` | `LOAD_ATTR` | `unpack`、`decompress`、`encode` 属性 |
+| `0x83` | `CALL_FUNCTION` | 参数入栈后调用函数 |
+| `0x67` | `BUILD_SLICE` | `data[:4]` 与后续数据切片 |
+| `0x13` | `BINARY_SUBSCR` | 字节、列表、元组索引 |
+| `0x41` / `0x19` | `BINARY_MULTIPLY` / `BINARY_ADD` | 下标计算中的乘、加 |
+| `0x1C` / `0x0C` | `BINARY_MODULO` / `BINARY_XOR` | 模长度与循环密钥异或 |
+| `0x5F` / `0x97` | `FOR_ITER` / `JUMP_ABSOLUTE` | 循环取值与回跳 |
+| `0x04` | `STORE_SUBSCR` | 交换两个索引位置 |
+| `0x91` / `0x46` | `MAKE_CLOSURE` / `YIELD_VALUE` | 生成器表达式 |
+| `0x4C` | `RETURN_VALUE` | 函数结束 |
+
+#### 从字节码恢复具体算法
+
+主函数提供了密钥与密文。`main` 的两个字节常量分别为 16 字节密钥和 54 字节密文包。
+
+密钥：
+
+```text
+c63b33cea0bdcf48794b4f9b2a19b2bf
+```
+
+密文包：
+
+```text
+3200000053ff072f19cb663f40d4bea77805f7f133e933c904b6005737b00ff3602c4670e6611fc7b8d3061b3b1faf73c807e9708408
+```
+
+密文包的前 4 字节是 `32 00 00 00`。结合 `struct.unpack` 的格式常量 `'<I'`，可知这是一个小端无符号 32 位长度，即 `0x32 = 50`。真正参与后续变换的是紧接着的 50 字节。
+
+#### 构造索引置换
+
+`decrypt_flag` 使用到两个整数常量：
+
+```text
+57005 = 0xDEAD
+48879 = 0xBEEF
+```
+
+先构造 `indices = list(range(len(data)))`，然后执行：
+
+```python
+for i in range(len(data) - 1, -1, -1):
+    j = (i * 0xDEAD + 0xBEEF) % len(data)
+    indices[i], indices[j] = indices[j], indices[i]
+```
+
+需要注意三个细节：下标从 `len(data)-1` 向 0 递减，**包含 0**；取模的模数是完整数据长度；交换的是**索引列表**，不是直接交换密文字节。
+
+第一个生成器的闭包捕获 `data`，其主体等价于 `data[i] for i in indices`。于是重排结果为：
+
+```python
+data = bytes(data[i] for i in indices)
+```
+
+#### 循环密钥异或
+
+
+第二个生成器捕获 `key`，遍历 `enumerate(data)`，其主体等价于：
+
+```python
+b ^ key[i % len(key)]
+```
+
+因此执行：
+
+```python
+data = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+```
+
+这一步之后得到有效的 zlib 数据：
+
+```text
+789c4bcb494caf0e4a2d4b2d2a4e8d0fc9c82c8e0fcd29294a8cf7482c4a8977ce48ccc949cd4b4f555454ac050066480ff0
+```
+
+#### zlib 解压与最终比较
+
+最后调用 `zlib.decompress(data)`，返回 Flag 字节串。完整等价逻辑为：
+
+```python
+import struct
+import zlib
+
+def decrypt_flag(data, key):
+    size = struct.unpack('<I', data[:4])[0]
+    data = bytearray(data[4:4 + size])
+    indices = list(range(len(data)))
+    for i in range(len(data) - 1, -1, -1):
+        j = (i * 0xDEAD + 0xBEEF) % len(data)
+        indices[i], indices[j] = indices[j], indices[i]
+    data = bytes(data[i] for i in indices)
+    data = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+    return zlib.decompress(data)
+```
+
+主函数读取 `input('Enter flag: ').encode()`，调用上述函数解密内置密文，然后比较两者；相等打印 `Correct!`，不相等打印 `Wrong!`。异常路径打印 `Error: Invalid input`。
+
+`anti_debug()` 尝试访问 `ctypes.windll.kernel32.IsDebuggerPresent()`，异常被捕获后忽略。该检查不参与密文和密钥生成，静态恢复流程不需要执行它。
+
+#### 完整回加密验证
+
+把结果按相反方向重新处理：
+
+1. 用 zlib 压缩恢复出的 Flag。
+2. 用相同的 16 字节密钥循环异或。
+3. 利用索引置换的逆映射，把字节放回原密文位置。
+4. 在前面添加 4 字节小端长度。
+5. 将整个 54 字节密文包与附件常量逐字节比较。
+
+令 `P` 为前面构造的索引列表，解密重排是 `out[i] = encrypted[P[i]]`，因此逆向回填必须是：
+
+```python
+for i, position in enumerate(P):
+    encrypted[position] = out[i]
+```
+
+最终脚本包含：
+
+```python
+assert encrypt(flag, key) == encrypted
+```
+
+
+```text
+Key: c63b33cea0bdcf48794b4f9b2a19b2bf
+Flag: flag{Reverse_This_Ultra_Hard_Challenge!!!}
+Exact encryption round trip: PASS
+```
+
+solve 脚本：[r03_solve.py](./assets/r03_solve.py) 
+
