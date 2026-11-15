@@ -468,7 +468,7 @@ python -m pip install sympy fpylll cysignals python-flint
 
 ## Misc 方向
 
-### 01. Streaming
+### 01. Streaming (UNFINISHED)
 
 #### 初步分析
 
@@ -806,5 +806,66 @@ FLAG>>> flag{3a74cb6de60e417a9d5ffcdbcb087700}
 #### 初步分析
 
 一样先检查保护：
+
 ![alt text](./assets/p02.checksec.png)
+
+无 canary + 无 PIE：返回地址可被直接覆盖，且后门地址固定。因此无需任何泄漏，直接栈溢出 ret2text 即可。NX 只是禁止栈上执行 shellcode。
+
+#### 逆向分析
+
+![alt text](./assets/p02.main.png)
+
+`main`（`0x40129d`）是一个无限循环：`init()`（设缓冲、`alarm(60)`）=> `vuln()`。
+
+关键在漏洞函数 `vuln`（`0x40123e`）与一个独立后门函数（`0x4011d6`）。
+
+
+![alt text](assets/p02.vuln.png)
+
+**漏洞函数 `vuln`👆**
+
+
+![alt text](assets/p02.backdoor.png)
+
+**后门函数👆**
+
+因此，只需把返回地址覆盖成后门地址即可 getshell。
+
+#### ret2text
+
+无 canary、无 PIE，溢出 40 字节后把返回地址改成后门地址即可。payload：
+
+```
+b"A"*40 + p64(后门地址)
+```
+
+However, 直接 ret 到 `0x4011d6` / `0x4011da` 会因 `push rbp` 改变栈对齐，导致 `system` 内部 `movaps` 要求 16 字节对齐而**崩溃**。
+
+改跳 `0x4011de`（跳过 `endbr64` 与 `push rbp`，直接 `lea rdi; call system`），栈对齐正确。
+
+本地对三个入口 `0x4011d6 / 0x4011da / 0x4011de` 逐一实测，仅 `0x4011de` 出 shell。
+
+#### 读 Flag
+
+```bash
+$ cat /flag
+
+flag{dmOsRZWeQJbdxj0b7sEuh6DHW573ol6ng2e9SGAC}
+```
+
+ok。
+
+解题脚本见 [ezstack01_solve.py](./assets/ezstack01_solve.py).
+
+用法: 
+
+```bash
+python3 exploit.py [IP] [PORT]
+```
+
+## Reverse 方向
+
+### py2cc
+
+#### 初步分析
 
