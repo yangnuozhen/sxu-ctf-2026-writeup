@@ -1447,3 +1447,15 @@ Content-Type: image/jpeg
 ```
 alert('you have get points,here is the flag:flag{Xry8GI384a6ANEyeJJACDeNj31ZwhMfh3riDIirG}');
 ```
+
+---
+
+
+## Agent 使用说明
+
+本文档内部分题解由以下模型辅助：
+- gpt-6.1-sol
+- gpt-6-astra
+- qwen4-max-preview
+- claude-opus-5-5
+- claude-fable-5-2
