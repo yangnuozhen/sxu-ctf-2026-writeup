@@ -688,3 +688,123 @@ R0 G0 B0 R1 G1 B1 R2 G2
 ```plain
 flag{16D28F7F-E02C-7C37-903F-342A74E0F1CF}
 ```
+
+## Pwn 方向
+
+### 01. Fakefake
+
+#### 初步分析
+
+检查附件中 `a.out` 的保护机制
+
+![alt text](./assets/p01.checksec.png)
+
+GOT 不可写（Full RELRO）、有栈金丝雀、NX、PIE 地址随机化，且程序 stripped。
+
+这意味着不能改 GOT、不能直接 ret2shellcode、返回地址与后门地址都随 PIE 随机化——
+
+必须先泄漏 canary 和 PIE 基址，才能完成栈溢出劫持。
+
+#### 逆向分析
+
+程序是一个「255 以内加减乘除」计算器，菜单循环。关键函数（相对 PIE 基址的偏移）：
+
+| Offset | 功能 |
+|------|------|
+| `0x12ba` | 后门：`execve("/bin/sh", 0, 0)` |
+| `0x134a` | `add`：`scanf("%d",&size)` 后 `for(i=0;i<size;i++) scanf("%hhd",&buf[i])`，size 无上界 |
+| `0x1636` | `mul`：与 add 相同的溢出结构 |
+| `0x12f7` | `get_choice`：裸 `read(0,buf,2)` + `atoi`（不走 scanf/stdio） |
+
+#### 后门函数
+
+`0x12ba` 处是一个完整的 `execve("/bin/sh", NULL, NULL)` 后门。只要把返回地址覆盖成 `PIE基址 + 0x12ba` 就能 getshell, 无需 ROP / 无需泄漏 libc。
+
+![alt text](./assets/p01.backdoor.png)
+
+#### 漏洞函数 add
+
+![alt text](./assets/p01.fcn_0000134a.png)
+
+栈帧布局：`buf` 在 `rbp-0x110`，canary 在 `rbp-0x8`，返回地址在 `rbp+0x8`。
+
+- `buf` → canary 距离 = `0x108`（264 字节）
+- `buf` → 返回地址距离 = `0x118`（280 字节）
+
+两段关键循环：
+
+1. 写循环（`0x14d1`–`0x150a`）：`for(i=0;i<size;i++) scanf("%hhd",&buf[i])`。
+   `size` 由用户输入且无上界检查 => 可写穿 canary、saved rbp、返回地址 => 栈溢出。
+2. 求和循环（`0x1522`–`0x155b`）：`result = (Σ buf[i]) & 0xff`，随后 `printf("result is %d")`。求和读取的是 `buf` 的原始字节——即使写循环在 canary 处停下，求和仍会把 canary / 返回地址的字节累加进来。
+
+#### 泄露 Canary
+
+要泄漏 canary，需要：写循环写到 canary 前就停止（不破坏 canary，避免 `__stack_chk_fail`）。
+
+但求和循环仍把 canary 字节算进 `result`。做法是让 scanf 在 canary 处匹配失败：
+
+- 先写满 `0x108` 个字节（到达 canary 前）。
+- 再发送一个会让 `%hhd` 匹配失败的输入，使 scanf 停止写入。
+- 求和循环仍读取 canary 的原始字节 => `result` 包含 canary 信息。
+- 通过逐字节差分还原 canary。
+
+用一个最小复现 C ：
+
+> `scanf` 读到符号 `+`/`-` 后跟非数字时，匹配失败，但会消耗掉符号、只把空白 `\n` `ungetc` 回去。空白会被下一次 scanf 自动跳过，避免了 stdio 与裸 read 失步
+
+因此用 `+\n` 作为停写符，可以在单连接内反复泄漏。另一个关键细节：
+
+`size = 265 + k` 时，写循环会越过 canary 的前 `k+1` 字节，必须发送 `k+1` 个 `+\n` 才能逐字节挡住写循环；否则后续迭代把下一轮输入写进 canary 导致崩溃。
+
+---
+
+对 `k = 0..7`：`size = 0x109 + k`，发送 264 个 0 + (k+1) 个 `+\n`。
+
+每次 `result` 差分得到 canary 的第 k 字节。校验 `canary[0] == 0`（canary 低字节恒为 0）。
+
+```
+[+] canary = 00a72142579cd10c
+```
+
+#### 泄漏返回地址 => PIE 基址
+
+对 `j = 0..7`：`size = 0x119 + j`，发送 264 个 `0` + `canary(8B)` + 8 字节 `rbp(0)` + (j+1) 个 `+\n`。
+
+差分得到返回地址 8 字节。由 `retaddr = PIE基址 + 0x19a3` 反推：
+
+```
+pie_base = retaddr - 0x19a3      （校验页对齐 base & 0xfff == 0）
+[+] retaddr=0x558deaefb9a3 pie_base=0x558deaefa000
+```
+
+#### 从溢出到后门
+
+`size = 288`，payload：
+
+> 264 个 `0` + `canary(8B)` + 8 字节 `rbp(0)` + `(pie_base + 0x12ba)`
+
+写回正确的 canary（绕过 `__stack_chk_fail`），返回地址指向后门 `execve("/bin/sh")`。
+
+#### 读 Flag
+
+后门 `execve` 的 `envp = 0` ，即 PATH 为空，且目标为精简 chroot（`/bin` 只有 `ls/sh/timeout`，没有 `cat`）。
+
+因此用 **shell 内建**读文件：
+
+```sh
+while IFS= read -r l || [ -n "$l" ]; do echo "$l"; done < /flag
+```
+
+```plain
+FLAG>>> flag{3a74cb6de60e417a9d5ffcdbcb087700}
+```
+
+上述脚本见[fakefake_solve.py](./assets/fakefake_solve.py).
+
+### 02. ezstack01
+
+#### 初步分析
+
+一样先检查保护：
+![alt text](./assets/p02.checksec.png)
+
